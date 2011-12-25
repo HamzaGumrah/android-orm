@@ -1,7 +1,7 @@
 package com.android.orm;
 
 /**
- * contains constant values for droid-orm project
+ * contains constant values for android-orm project
  * 
  * @author Hamza Gumrah
  */
@@ -13,4 +13,13 @@ public interface OrmConstants {
 	
 	public static final String DEFAULT_FOREIGN_KEY_REFERENCE = "id";
 	
+	public static final String SQLITE_TEXT = "TEXT";
+	
+	public static final String SQLITE_NUMBER = "INTEGER";
+	
+	public static final String SQLITE_BLOB = "BLOB";
+	
+	public static final String SQLITE_DATE = "INTEGER";
+	
+	public static final String SQLITE_REAL = "REAL";
 }

@@ -7,6 +7,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.util.Log;
 
 import com.android.orm.Persistable;
 import com.android.orm.exception.DatabaseAdapterInstantiationException;
@@ -92,7 +93,7 @@ public abstract class DatabaseAdapterFactory {
 			this.registry = new OrmRegistry(entityQualifiedNames);
 			this.DATABASE_NAME = databaseName;
 			this.DATABASE_VERSION = databaseVersion;
-			this.databaseHelper = new DatabaseHelper();
+			this.databaseHelper = new SqliteHelper();
 			
 		}
 		
@@ -165,15 +166,29 @@ public abstract class DatabaseAdapterFactory {
 		 * 
 		 * @author Hamza
 		 */
-		private class DatabaseHelper extends SQLiteOpenHelper {
+		private class SqliteHelper extends SQLiteOpenHelper {
 			
-			public DatabaseHelper() {
+			SqliteHelper() {
 				super(context, DATABASE_NAME, null, DATABASE_VERSION);
 			}
 			
 			@Override
 			public void onCreate(SQLiteDatabase db) {
-				// dataBase.query();
+				dataBase.beginTransaction();
+				try {
+					for (String sql : registry.generateCreateStatements()) {
+						Log.i(TAG, sql);
+						dataBase.execSQL(sql);
+					}
+					dataBase.setTransactionSuccessful();
+				}
+				catch (Exception e) {
+					Log.e(TAG, "Can not create tables , rolling back ... Error : " + e.getMessage());
+				}
+				finally {
+					dataBase.endTransaction();
+				}
+				
 			}
 			
 			@Override

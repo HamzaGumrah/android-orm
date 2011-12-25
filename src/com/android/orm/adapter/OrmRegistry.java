@@ -3,7 +3,9 @@ package com.android.orm.adapter;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import android.content.ContentValues;
@@ -15,17 +17,19 @@ import com.android.orm.annotation.Column;
 import com.android.orm.annotation.Entity;
 import com.android.orm.annotation.ForeignKey;
 import com.android.orm.annotation.PrimaryKey;
+import com.android.orm.exception.ColumnNotNullableException;
 import com.android.orm.exception.DublicatedEntityNameException;
 import com.android.orm.exception.EntityNotFoundException;
 import com.android.orm.exception.MultiplePrimaryKeyException;
-import com.android.orm.exception.NullColumnException;
 import com.android.orm.exception.PrimaryKeyNotFoundException;
 import com.android.orm.exception.UnRegisteredEntityException;
 import com.android.orm.exception.UnsupportedFieldTypeException;
 import com.android.orm.exception.UnsupportedForeignKeyReferenceException;
 import com.android.orm.exception.UnsupportedPrimaryKeyTypeException;
+import com.android.orm.type.OrderType;
 import com.android.orm.util.PersistenceUtil;
 import com.android.orm.util.ReflectionUtil;
+import com.android.orm.util.SqliteUtil;
 
 /**
  * keeps related getter and setter methods of fields. Also checks if entity classes are well-defined or not. Initializes at SqliteAdapter's constructor. this registry designed for reaching
@@ -82,11 +86,12 @@ final class OrmRegistry {
 					
 					Method getMethod = ReflectionUtil.findGetMethod(clazz, OrmConstants.PRIMARY_KEY_FIELD_NAME);
 					Method setMethod = ReflectionUtil.findSetMethod(clazz, Long.class, OrmConstants.PRIMARY_KEY_FIELD_NAME);
-					entityMap.put(OrmConstants.PRIMARY_KEY_COLUMN_NAME, new ColumnRegistry(null, getMethod, setMethod, true, null));
+					PrimaryKeyMetaData primaryKeyMetaData = new PrimaryKeyMetaData(field.getAnnotation(PrimaryKey.class).orderby());
+					entityMap.put(OrmConstants.PRIMARY_KEY_COLUMN_NAME, new ColumnRegistry(primaryKeyMetaData, getMethod, setMethod));
 				}
 				else if (field.isAnnotationPresent(Column.class)) {
 					// check if fieldType supported
-					isFieldTypeSupported(field.getClass());
+					PersistenceUtil.isFieldTypeSupported(field.getClass());
 					Column column = field.getAnnotation(Column.class);
 					// if Column is also a foreign key
 					ForeignKeyMetaData foreignKeyMetaData = null;
@@ -96,7 +101,7 @@ final class OrmRegistry {
 						String foreignKeyReference = field.getAnnotation(ForeignKey.class).reference();
 						if (!foreignKeyReference.equals(OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE)) {
 							Class<?> referenceType = ReflectionUtil.findFieldType(field.getClass(), foreignKeyReference);
-							if (!isForeignKeyReferenceSupported(referenceType))
+							if (!PersistenceUtil.isForeignKeyReferenceSupported(referenceType))
 								throw new UnsupportedForeignKeyReferenceException(entityName, field.getName(), foreignKeyReference, referenceType.getName());
 							foreignKeyMetaData = new ForeignKeyMetaData(foreignKeyReference, referenceType);
 						}
@@ -109,10 +114,10 @@ final class OrmRegistry {
 					Method setMethod = ReflectionUtil.findSetMethod(clazz, field.getClass(), field.getName());
 					if (column.name().equals("")) {
 						Log.w(TAG, "Columns strongly couraged to have name(), else fieldName will be mapped as column name ");
-						entityMap.put(field.getName(), new ColumnRegistry(column, getMethod, setMethod, false, foreignKeyMetaData));
+						entityMap.put(field.getName(), new ColumnRegistry(column, getMethod, setMethod, foreignKeyMetaData, field.getClass()));
 					}
 					else
-						entityMap.put(column.name(), new ColumnRegistry(column, getMethod, setMethod, false, foreignKeyMetaData));
+						entityMap.put(column.name(), new ColumnRegistry(column, getMethod, setMethod, foreignKeyMetaData, field.getClass()));
 					
 				}
 			}
@@ -120,63 +125,6 @@ final class OrmRegistry {
 				throw new PrimaryKeyNotFoundException(entityName);
 			this.registryMap.put(entityName, entityMap);
 		}
-	}
-	
-	/**
-	 * checks if fieldType supported or not
-	 * 
-	 * @param fieldType
-	 */
-	private final void isFieldTypeSupported(final Class<?> fieldType) {
-		if (Integer.class.isAssignableFrom(fieldType))
-			return;
-		if (Long.class.isAssignableFrom(fieldType))
-			return;
-		if (String.class.isAssignableFrom(fieldType))
-			return;
-		if (Byte.class.isAssignableFrom(fieldType))
-			return;
-		if (Boolean.class.isAssignableFrom(fieldType))
-			return;
-		if (byte[].class.isAssignableFrom(fieldType))
-			return;
-		if (Short.class.isAssignableFrom(fieldType))
-			return;
-		if (Double.class.isAssignableFrom(fieldType))
-			return;
-		if (Float.class.isAssignableFrom(fieldType))
-			return;
-		if (Enum.class.isAssignableFrom(fieldType))
-			return;
-		if (Persistable.class.isAssignableFrom(fieldType))
-			return;
-		throw new UnsupportedFieldTypeException(fieldType.getName());
-	}
-	
-	private final boolean isForeignKeyReferenceSupported(final Class<?> referenceType) {
-		if (Integer.class.isAssignableFrom(referenceType))
-			return true;
-		if (Long.class.isAssignableFrom(referenceType))
-			return true;
-		if (String.class.isAssignableFrom(referenceType))
-			return true;
-		if (Byte.class.isAssignableFrom(referenceType))
-			return true;
-		if (Boolean.class.isAssignableFrom(referenceType))
-			return true;
-		if (byte[].class.isAssignableFrom(referenceType))
-			return true;
-		if (Short.class.isAssignableFrom(referenceType))
-			return true;
-		if (Double.class.isAssignableFrom(referenceType))
-			return true;
-		if (Float.class.isAssignableFrom(referenceType))
-			return true;
-		if (Enum.class.isAssignableFrom(referenceType))
-			return true;
-		if (Persistable.class.isAssignableFrom(referenceType))
-			return true;
-		return false;
 	}
 	
 	/**
@@ -205,6 +153,45 @@ final class OrmRegistry {
 	 */
 	public final void setValueOf(final String entityName, final String columnName, final Object value) {
 		
+	}
+	
+	/**
+	 * @return generated create statements for database
+	 */
+	public final String[] generateCreateStatements() {
+		List<String> statements = new ArrayList<String>();
+		// set foreign keys off at first
+		statements.add("PRAGMA foreign_keys = OFF;");
+		for (String entityName : this.registryMap.keySet()) {
+			StringBuilder queryBuilder = new StringBuilder();
+			queryBuilder.append("CREATE TABLE ");
+			queryBuilder.append(entityName.toUpperCase());
+			// start filling column definitions
+			queryBuilder.append("(");
+			queryBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
+			queryBuilder.append(" INTEGER");
+			OrderType primaryKeyOrderType = OrderType.DESC;
+			Map<String, ColumnRegistry> columnMetaData = this.registryMap.get(entityName);
+			for (String columnName : columnMetaData.keySet()) {
+				ColumnRegistry columnRegistry = columnMetaData.get(columnName);
+				if (columnRegistry.isPrimaryKey()) {
+					primaryKeyOrderType = columnRegistry.primaryKeyMetaData.orderby;
+					continue;
+				}
+				queryBuilder.append(", ");
+				queryBuilder.append(columnName);
+				queryBuilder.append(" " + columnRegistry.sqliteFieldType);
+				if (columnRegistry.sqliteFieldType.equals(OrmConstants.SQLITE_TEXT) && columnRegistry.self.length() > 0)
+					queryBuilder.append("(" + columnRegistry.self.length() + ")");
+			}
+			queryBuilder.append(", PRIMARY KEY(");
+			queryBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
+			queryBuilder.append(" " + primaryKeyOrderType.name() + ")");
+			queryBuilder.append(");");
+			// end column definitions
+		}
+		statements.add("PRAGMA foreign_keys = ON;");
+		return statements.toArray(new String[0]);
 	}
 	
 	/**
@@ -269,7 +256,7 @@ final class OrmRegistry {
 	 */
 	private final void addToContent(final ContentValues values, final String columnName, final Object value, final ColumnRegistry columnRegistry) throws IllegalArgumentException, SecurityException, IllegalAccessException, InvocationTargetException, NoSuchMethodException {
 		if (value == null && !columnRegistry.isNullable())
-			throw new NullColumnException(columnName);
+			throw new ColumnNotNullableException(columnName);
 		if (value == null)
 			return;
 		else if (value instanceof String)
@@ -307,34 +294,56 @@ final class OrmRegistry {
 		
 		private final Column self;
 		
+		private final String sqliteFieldType;
+		
 		private final Method getMethod;
 		
 		private final Method setMethod;
 		
-		private final boolean isPrimaryKey;
+		private final PrimaryKeyMetaData primaryKeyMetaData;
 		
 		private final ForeignKeyMetaData foreignKeyMetaData;
 		
-		ColumnRegistry(Column self, Method getMethod, Method setMethod, boolean isPrimaryKey, ForeignKeyMetaData foreignKeyMetaData) {
+		private final boolean isDate;
+		
+		ColumnRegistry(PrimaryKeyMetaData primaryKeyMetaData, Method getMethod, Method setMethod) {
+			this.primaryKeyMetaData = primaryKeyMetaData;
+			this.getMethod = getMethod;
+			this.setMethod = setMethod;
+			this.foreignKeyMetaData = null;
+			this.self = null;
+			this.isDate = false;
+			this.sqliteFieldType = OrmConstants.SQLITE_NUMBER;
+		}
+		
+		ColumnRegistry(Column self, Method getMethod, Method setMethod, ForeignKeyMetaData foreignKeyMetaData, Class<?> fieldType) {
 			super();
-			this.isPrimaryKey = isPrimaryKey;
-			if (!this.isPrimaryKey)
-				this.self = self;
-			else {
-				Log.w(TAG, "PrimaryKeys not allowed to have Column definition");
-				this.self = null;
-			}
+			this.primaryKeyMetaData = null;
+			this.isDate = PersistenceUtil.isDate(fieldType);
+			this.self = self;
 			this.getMethod = getMethod;
 			this.setMethod = setMethod;
 			this.foreignKeyMetaData = foreignKeyMetaData;
+			// if this is a foreign key , sqliteFieldType should be foreign key reference column type
+			if (this.foreignKeyMetaData != null)
+				this.sqliteFieldType = SqliteUtil.getSqliteTypeName(this.foreignKeyMetaData.referenceFieldType);
+			else
+				this.sqliteFieldType = SqliteUtil.getSqliteTypeName(fieldType);
 		}
 		
 		private final boolean isNullable() {
-			if (isPrimaryKey)
+			if (this.primaryKeyMetaData != null)
 				return false;
 			return self.nullable();
 		}
 		
+		private final boolean isPrimaryKey() {
+			return this.primaryKeyMetaData != null;
+		}
+		
+		private final boolean isForeignKey() {
+			return this.foreignKeyMetaData != null;
+		}
 	}
 	
 	private final class ForeignKeyMetaData {
@@ -343,11 +352,11 @@ final class OrmRegistry {
 		
 		private final Class<?> referenceFieldType;
 		
-		public ForeignKeyMetaData(String referenceFieldName) {
+		ForeignKeyMetaData(String referenceFieldName) {
 			this(referenceFieldName, Long.class);
 		}
 		
-		public ForeignKeyMetaData(String referenceFieldName, Class<?> referenceFieldType) {
+		ForeignKeyMetaData(String referenceFieldName, Class<?> referenceFieldType) {
 			super();
 			if (referenceFieldName != null && referenceFieldType != null) {
 				this.referenceFieldName = referenceFieldName;
@@ -359,5 +368,14 @@ final class OrmRegistry {
 			}
 		}
 		
+	}
+	
+	private final class PrimaryKeyMetaData {
+		
+		private final OrderType orderby;
+		
+		PrimaryKeyMetaData(OrderType orderby) {
+			this.orderby = orderby;
+		}
 	}
 }

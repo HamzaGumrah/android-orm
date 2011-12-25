@@ -13,6 +13,10 @@ public @interface Column {
 	
 	boolean nullable() default true;
 	
-	boolean unique() default true;
+	boolean unique() default false;
 	
+	/**
+	 * @return length value for String fields
+	 */
+	int length() default 0;
 }

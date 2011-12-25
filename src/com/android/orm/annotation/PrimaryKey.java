@@ -5,6 +5,8 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
+import com.android.orm.type.OrderType;
+
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 /**
@@ -13,5 +15,7 @@ import java.lang.annotation.Target;
  *
  */
 public @interface PrimaryKey {
+	
+	OrderType orderby() default OrderType.DESC;
 	
 }
