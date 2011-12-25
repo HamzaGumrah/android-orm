@@ -1,0 +1,7 @@
+ORM(Object Relational Mapping) tool for android.
+
+depends  AndroidAPI 2.3.3 which has Sqlite 3.6.20, supports Foreign Keys. 
+
+Trying to sum up my personal requirement in this library. 
+
+Currently under development. 
