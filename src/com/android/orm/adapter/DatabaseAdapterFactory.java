@@ -26,6 +26,11 @@ public abstract class DatabaseAdapterFactory {
 	private static DatabaseAdapterFactory self = new DatabaseAdapterFactory() {};
 	
 	/**
+	 * shared metadata for all adapters. initiliazed at first adapter generation
+	 */
+	private static OrmRegistry registry = null;
+	
+	/**
 	 * Use this method for initializing SqliteAdapter
 	 * 
 	 * @param ctx
@@ -40,14 +45,15 @@ public abstract class DatabaseAdapterFactory {
 			synchronized (adapter) {
 				if (adapter == null)
 					try {
-						adapter = self.newAdapter(ctx, databaseName, databaseVersion, entityQualifiedNames);
+						registry = new OrmRegistry(entityQualifiedNames);
+						adapter = self.newAdapter(ctx, databaseName, databaseVersion);
+						adapter.open();
 					}
 					catch (Exception e) {
 						throw new DatabaseAdapterInstantiationException(e.getMessage());
 					}
 			}
 		}
-		adapter.open();
 		return adapter;
 	}
 	
@@ -60,8 +66,18 @@ public abstract class DatabaseAdapterFactory {
 		return adapter;
 	}
 	
-	public DatabaseAdapter newAdapter(Context ctx, String databaseName, int databaseVersion, String... entityQualifiedNames) throws ClassNotFoundException, NoSuchMethodException {
-		return new SqliteAdapter(ctx, databaseName, databaseVersion, entityQualifiedNames);
+	/**
+	 * when multi thread operations needed, open another connection to database using a new adapter. it is essential to close additional adapters after usage.
+	 * 
+	 * @param ctx
+	 * @param databaseName
+	 * @param databaseVersion
+	 * @return
+	 * @throws ClassNotFoundException
+	 * @throws NoSuchMethodException
+	 */
+	public DatabaseAdapter newAdapter(Context ctx, String databaseName, int databaseVersion) throws ClassNotFoundException, NoSuchMethodException {
+		return new SqliteAdapter(ctx, databaseName, databaseVersion);
 	}
 	
 	private class SqliteAdapter implements DatabaseAdapter {
@@ -71,8 +87,6 @@ public abstract class DatabaseAdapterFactory {
 		private final Context context;
 		
 		private final SQLiteOpenHelper databaseHelper;
-		
-		private final OrmRegistry registry;
 		
 		private SQLiteDatabase dataBase;
 		
@@ -88,9 +102,8 @@ public abstract class DatabaseAdapterFactory {
 		 * @throws ClassNotFoundException if entity classes not found by ClassLoader
 		 * @throws NoSuchMethodException
 		 */
-		public SqliteAdapter(Context ctx, String databaseName, int databaseVersion, String... entityQualifiedNames) throws ClassNotFoundException, NoSuchMethodException {
+		public SqliteAdapter(Context ctx, String databaseName, int databaseVersion) throws ClassNotFoundException, NoSuchMethodException {
 			this.context = ctx;
-			this.registry = new OrmRegistry(entityQualifiedNames);
 			this.DATABASE_NAME = databaseName;
 			this.DATABASE_VERSION = databaseVersion;
 			this.databaseHelper = new SqliteHelper();
@@ -110,7 +123,7 @@ public abstract class DatabaseAdapterFactory {
 		@Override
 		public <T extends Persistable> void persist(T entity) {
 			try {
-				ContentValues values = this.registry.getContentValues(entity);
+				ContentValues values = registry.getContentValues(entity);
 				long systemId = dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()), null, values);
 				entity.setId(systemId);
 			}
