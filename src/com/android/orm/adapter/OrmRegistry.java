@@ -28,10 +28,8 @@ import com.android.orm.exception.UnRegisteredEntityException;
 import com.android.orm.exception.UnsupportedFieldTypeException;
 import com.android.orm.exception.UnsupportedForeignKeyReferenceException;
 import com.android.orm.exception.UnsupportedPrimaryKeyTypeException;
-import com.android.orm.type.OrderType;
 import com.android.orm.util.PersistenceUtil;
 import com.android.orm.util.ReflectionUtil;
-import com.android.orm.util.SqliteUtil;
 
 /**
  * keeps meta data of Entities, Columns and Constrains. This class should only be used as SingleTone
@@ -168,14 +166,14 @@ final class OrmRegistry {
 				ColumnMetaData columnMetaData = entityMetaData.columns.get(columnName);
 				sqlBuilder.append(", ");
 				sqlBuilder.append(columnName);
-				sqlBuilder.append(" " + columnMetaData.sqliteFieldType);
+				sqlBuilder.append(" " + columnMetaData.getSqliteFieldType());
 				// if length value is specified for Text attr
-				if (columnMetaData.sqliteFieldType.equals(OrmConstants.SQLITE_TEXT) && columnMetaData.self.length() > 0)
-					sqlBuilder.append("(" + columnMetaData.self.length() + ")");
+				if (columnMetaData.getSqliteFieldType().equals(OrmConstants.SQLITE_TEXT) && columnMetaData.length() > 0)
+					sqlBuilder.append("(" + columnMetaData.length() + ")");
 			}
 			sqlBuilder.append(", PRIMARY KEY(");
 			sqlBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
-			sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.orderby + ")");
+			sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.getOrderType() + ")");
 			sqlBuilder.append(");");
 			statements.add(sqlBuilder.toString());
 			result.add(entityName);
@@ -215,10 +213,10 @@ final class OrmRegistry {
 		// first generate create statements for dependentEntities
 		for (ForeignKeyMetaData foreignKeyMetaData : entityMetaData.dependentEntities.values()) {
 			// if create statement already generated for dependent entity skip it
-			if (generatedEntities.contains(foreignKeyMetaData.referenceEntityName))
+			if (generatedEntities.contains(foreignKeyMetaData.getReferenceEntityName()))
 				continue;
 			// if create statement not generated , generate its statement before this one.
-			generateCreateStatement(foreignKeyMetaData.referenceEntityName, statements, generatedEntities);
+			generateCreateStatement(foreignKeyMetaData.getReferenceEntityName(), statements, generatedEntities);
 		}
 		// after generating create statements for all dependents , we can continue for this entity
 		StringBuilder sqlBuilder = new StringBuilder();
@@ -227,23 +225,23 @@ final class OrmRegistry {
 			ColumnMetaData columnMetaData = entityMetaData.columns.get(columnName);
 			sqlBuilder.append(", ");
 			sqlBuilder.append(columnName);
-			sqlBuilder.append(" " + columnMetaData.sqliteFieldType);
+			sqlBuilder.append(" " + columnMetaData.getSqliteFieldType());
 			// if length value is specified for Text attr
-			if (columnMetaData.sqliteFieldType.equals(OrmConstants.SQLITE_TEXT) && columnMetaData.self.length() > 0)
-				sqlBuilder.append("(" + columnMetaData.self.length() + ")");
+			if (columnMetaData.getSqliteFieldType().equals(OrmConstants.SQLITE_TEXT) && columnMetaData.length() > 0)
+				sqlBuilder.append("(" + columnMetaData.length() + ")");
 		}
 		// Primary Key definition
 		sqlBuilder.append(", PRIMARY KEY(");
 		sqlBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
-		sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.orderby + ")");
+		sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.getOrderType() + ")");
 		// foreign key definitions
 		for (String columnName : entityMetaData.dependentEntities.keySet()) {
 			sqlBuilder.append(", FOREIGN KEY(");
 			sqlBuilder.append(columnName);
 			sqlBuilder.append(") REFERENCES ");
 			ForeignKeyMetaData foreignKeyMetaData = entityMetaData.dependentEntities.get(columnName);
-			sqlBuilder.append(foreignKeyMetaData.referenceEntityName);
-			sqlBuilder.append("(" + foreignKeyMetaData.referenceColumnName + ")");
+			sqlBuilder.append(foreignKeyMetaData.getReferenceEntityName());
+			sqlBuilder.append("(" + foreignKeyMetaData.getReferenceColumnName() + ")");
 		}
 		
 		sqlBuilder.append(");");
@@ -372,8 +370,8 @@ final class OrmRegistry {
 		else if (Enum.class.isAssignableFrom(value.getClass()))
 			values.put(columnName, Enum.class.cast(value).name());
 		else if (value instanceof Persistable) {
-			if (columnMetaData.foreignKeyMetaData != null && !columnMetaData.foreignKeyMetaData.referenceFieldName.equals(OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE)) {
-				this.addToContent(values, columnName, ReflectionUtil.invokeGetMethod(value, columnMetaData.foreignKeyMetaData.referenceFieldName, columnMetaData.foreignKeyMetaData.referenceFieldType), columnMetaData);
+			if (columnMetaData.isForeignKey() && !columnMetaData.getForeignKeyMetaData().getReferenceFieldName().equals(OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE)) {
+				this.addToContent(values, columnName, ReflectionUtil.invokeGetMethod(value, columnMetaData.getForeignKeyMetaData().getReferenceFieldName(), columnMetaData.getForeignKeyMetaData().getReferenceFieldType()), columnMetaData);
 			}
 			else
 				values.put(columnName, ((Persistable) value).getId());
@@ -381,158 +379,5 @@ final class OrmRegistry {
 		else
 			throw new UnsupportedFieldTypeException(value.getClass().getName());
 	}
-	
-	// ###########################################################################################################
-	// META DATA DEFINITIONS
-	// ###########################################################################################################
-	/**
-	 * keeps required data for an entity : *if it is dependent on other entities, *has indexes checks circular references. If there exist a circular reference between two entities @throws
-	 * CircularForeignKeyException
-	 * 
-	 * @author Hamza Gumrah
-	 */
-	private final class EntityMetaData {
-		
-		/**
-		 * if this entity has foreign keys, it should dependent on other entities. we have to create dependentEntities first during database creation since Sqlite does not support ALTER TABLE add
-		 * constraint feature,
-		 * 
-		 * @see http://www.sqlite.org/omitted.html
-		 */
-		final Map<String, ForeignKeyMetaData> dependentEntities;
-		
-		final Map<String, ColumnMetaData> columns;
-		
-		PrimaryKeyMetaData primaryKeyMetaData;
-		
-		EntityMetaData() {
-			this.dependentEntities = new HashMap<String, OrmRegistry.ForeignKeyMetaData>(0);
-			this.columns = new HashMap<String, ColumnMetaData>();
-		}
-		
-		final void put(final String columnName, final ColumnMetaData columnMetaData) {
-			this.columns.put(columnName, columnMetaData);
-			if (columnMetaData.foreignKeyMetaData != null) {
-				this.dependentEntities.put(columnName, columnMetaData.foreignKeyMetaData);
-			}
-		}
-		
-		final Set<String> columnNames() {
-			return this.columns.keySet();
-		}
-		
-		final Method columnGetter(String columnName) {
-			return this.columns.get(columnName).getMethod;
-		}
-		
-		final Method columnSetter(String columnName) {
-			return this.columns.get(columnName).setMethod;
-		}
-		
-		final boolean hasDependetEntity() {
-			return this.dependentEntities.size() > 0;
-		}
-	}
-	
-	/**
-	 * keeps required information for a column e.g if it is primary key, has foreign key constraint related fields set and get methods e.t.c
-	 * 
-	 * @author Hamza Gumrah
-	 */
-	private final class ColumnMetaData {
-		
-		private final Column self;
-		
-		private final String sqliteFieldType;
-		
-		private final Method getMethod;
-		
-		private final Method setMethod;
-		
-		private final ForeignKeyMetaData foreignKeyMetaData;
-		
-		private final boolean isDate;
-		
-		ColumnMetaData(Column self, Method getMethod, Method setMethod, ForeignKeyMetaData foreignKeyMetaData, Class<?> fieldType) {
-			super();
-			this.isDate = PersistenceUtil.isDate(fieldType);
-			this.self = self;
-			this.getMethod = getMethod;
-			this.setMethod = setMethod;
-			this.foreignKeyMetaData = foreignKeyMetaData;
-			// if this is a foreign key , sqliteFieldType should be foreign key reference column type
-			if (this.foreignKeyMetaData != null)
-				this.sqliteFieldType = SqliteUtil.getSqliteTypeName(this.foreignKeyMetaData.referenceFieldType);
-			else
-				this.sqliteFieldType = SqliteUtil.getSqliteTypeName(fieldType);
-		}
-		
-		private final boolean isNullable() {
-			return self.nullable();
-		}
-		
-		private final boolean isForeignKey() {
-			return this.foreignKeyMetaData != null;
-		}
-	}
-	
-	/**
-	 * keeps meta data for foreign keys, reference field name reference field type
-	 * 
-	 * @author Hamza Gumrah
-	 */
-	private final class ForeignKeyMetaData {
-		
-		private final String referenceEntityName;
-		
-		private final String referenceColumnName;
-		
-		private final String referenceFieldName;
-		
-		private final Class<?> referenceFieldType;
-		
-		ForeignKeyMetaData(String referenceEntityName) {
-			this(referenceEntityName, OrmConstants.PRIMARY_KEY_COLUMN_NAME, OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE, Long.class);
-		}
-		
-		ForeignKeyMetaData(String referenceEntityName, String referenceColumnName, String referenceFieldName, Class<?> referenceFieldType) {
-			super();
-			this.referenceEntityName = referenceEntityName;
-			if (referenceFieldName != null && referenceFieldType != null) {
-				this.referenceFieldName = referenceFieldName;
-				this.referenceFieldType = referenceFieldType;
-				this.referenceColumnName = referenceColumnName;
-			}
-			else {
-				this.referenceFieldName = OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE;
-				this.referenceFieldType = Long.class;
-				this.referenceColumnName = OrmConstants.PRIMARY_KEY_COLUMN_NAME;
-			}
-		}
-		
-	}
-	
-	/**
-	 * keeps meta data for primary keys OrderType e.f DESC
-	 * 
-	 * @author Hamza Gumrah
-	 */
-	private final class PrimaryKeyMetaData {
-		
-		private final OrderType orderby;
-		
-		private final Method getMethod;
-		
-		private final Method setMethod;
-		
-		PrimaryKeyMetaData(OrderType orderby, Method getMethod, Method setMethod) {
-			this.orderby = orderby;
-			this.getMethod = getMethod;
-			this.setMethod = setMethod;
-		}
-	}
-	// ###########################################################################################################
-	// END OF META DATA DEFINITIONS
-	// ###########################################################################################################
 	
 }

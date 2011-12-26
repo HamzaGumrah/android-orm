@@ -1,11 +1,12 @@
 package com.android.orm.util;
 
+import java.lang.reflect.Modifier;
 import java.sql.Date;
 
 import com.android.orm.Persistable;
+import com.android.orm.annotation.AbstractEntity;
 import com.android.orm.annotation.Entity;
-import com.android.orm.exception.EntityNotFoundException;
-import com.android.orm.exception.PersistableNotFoundException;
+import com.android.orm.exception.EntityViolation;
 import com.android.orm.exception.UnsupportedFieldTypeException;
 
 public abstract class PersistenceUtil {
@@ -13,11 +14,20 @@ public abstract class PersistenceUtil {
 	/**
 	 * checks if class has Entity Annotation
 	 * 
-	 * @throws EntityNotFoundException
+	 * @throws EntityViolation if class is abstract and defined as entity
 	 */
-	public static void isEntity(Class<?> clazz) {
+	public static boolean isEntity(Class<?> clazz) {
 		if (!clazz.isAnnotationPresent(Entity.class))
-			throw new EntityNotFoundException(clazz.getName());
+			return false;
+		if (Modifier.isAbstract(clazz.getModifiers()))
+			throw new EntityViolation(clazz.getName(), "Abstract classes not allowed to have @Entity Annotation, use @AbstractEntity");
+		return true;
+	}
+	
+	public static boolean isAbstractEntity(Class<?> clazz) {
+		if (Modifier.isAbstract(clazz.getModifiers()) && clazz.isAnnotationPresent(AbstractEntity.class))
+			return true;
+		return false;
 	}
 	
 	/**
@@ -25,26 +35,19 @@ public abstract class PersistenceUtil {
 	 * @return gets Entity Annotation of the clazz and returns its name() if exists else return clazz.getSimpleName()
 	 */
 	public static String getEntityName(Class<?> clazz) {
-		try {
-			Entity e = clazz.getAnnotation(Entity.class);
-			if (e.name().equals(""))
-				return clazz.getSimpleName();
-			else
-				return e.name();
-		}
-		catch (Exception ex) {
-			throw new EntityNotFoundException(clazz.getSimpleName());
-		}
+		isEntity(clazz);
+		Entity e = clazz.getAnnotation(Entity.class);
+		if (e.name().equals(""))
+			return clazz.getSimpleName();
+		else
+			return e.name();
 	}
 	
 	/**
 	 * checks if Persistable.class.isAssignableFrom(clazz)
-	 * 
-	 * @throws PersistableNotFoundException
 	 */
-	public static void isPersistable(Class<?> clazz) {
-		if (!clazz.isAnnotationPresent(Entity.class))
-			throw new PersistableNotFoundException(clazz.getName());
+	public static boolean isPersistable(Class<?> clazz) {
+		return Persistable.class.isAssignableFrom(clazz);
 	}
 	
 	public static boolean isDate(Class<?> clazz) {
