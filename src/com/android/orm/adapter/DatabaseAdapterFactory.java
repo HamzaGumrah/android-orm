@@ -1,7 +1,9 @@
 package com.android.orm.adapter;
 
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import android.content.ContentValues;
 import android.content.Context;
@@ -9,9 +11,12 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.util.Log;
 
+import com.android.orm.OrmConstants;
 import com.android.orm.Persistable;
+import com.android.orm.exception.BatchPersistenceException;
 import com.android.orm.exception.DatabaseAdapterInstantiationException;
 import com.android.orm.exception.PersistenceException;
+import com.android.orm.exception.RecordNotFoundException;
 import com.android.orm.util.PersistenceUtil;
 
 /**
@@ -45,7 +50,11 @@ public abstract class DatabaseAdapterFactory {
 			synchronized (adapter) {
 				if (adapter == null)
 					try {
-						registry = new OrmRegistry(entityQualifiedNames);
+						//send Set to avoid duplicate values
+						Set<String> entityNames = new HashSet<String>();
+						for(String name:entityQualifiedNames)
+							entityNames.add(name);
+						registry = new OrmRegistry(entityNames);
 						adapter = self.newAdapter(ctx, databaseName, databaseVersion);
 						adapter.open();
 					}
@@ -64,6 +73,18 @@ public abstract class DatabaseAdapterFactory {
 	 */
 	public static DatabaseAdapter getAdapter() {
 		return adapter;
+	}
+	
+	static final Map<String, EntityMetaData> getRegistryData() {
+		if (registry == null)
+			throw new IllegalArgumentException("Registry information is not sufficient");
+		return registry.getRegistryData();
+	}
+	
+	static final EntityMetaData getEntityMetaData(String entityName) {
+		if (registry == null)
+			throw new IllegalArgumentException("Registry information is not sufficient");
+		return registry.getEntityMetaData(entityName);
 	}
 	
 	/**
@@ -106,7 +127,7 @@ public abstract class DatabaseAdapterFactory {
 			this.context = ctx;
 			this.DATABASE_NAME = databaseName;
 			this.DATABASE_VERSION = databaseVersion;
-			this.databaseHelper = new SqliteHelper();
+			this.databaseHelper = new SqliteDatabaseHelper();
 			
 		}
 		
@@ -123,9 +144,9 @@ public abstract class DatabaseAdapterFactory {
 		@Override
 		public <T extends Persistable> void persist(T entity) {
 			try {
-				ContentValues values = registry.getContentValues(entity);
-				long systemId = dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()), null, values);
-				entity.setId(systemId);
+				ContentValues values = SqliteHelper.getContentValues(entity);
+				long id = dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()), null, values);
+				entity.setId(id);
 			}
 			catch (Exception e) {
 				throw new PersistenceException(entity, e.getMessage());
@@ -133,21 +154,67 @@ public abstract class DatabaseAdapterFactory {
 		}
 		
 		@Override
+		public <T extends Persistable> void persist(Collection<T> entityCollection) {
+			if(entityCollection==null || entityCollection.size()==0)
+				return;
+			BatchPersistenceException ex = null;
+			this.dataBase.beginTransaction();
+			try {
+				for (T entity : entityCollection) {
+					ContentValues values = SqliteHelper.getContentValues(entity);
+					entity.setId(dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()),null,values));
+				}
+				this.dataBase.setTransactionSuccessful();
+			}
+			catch (Exception e) {
+				Log.e(TAG, "Rolling back batch insert, ERROR : "+e.getMessage());
+				for(T entity:entityCollection)
+					entity.setId(OrmConstants.NOT_PERSISTED_ID);
+				ex = new BatchPersistenceException(e.getMessage());
+			}
+			finally{
+				this.dataBase.endTransaction();
+				if(ex!=null)
+					throw ex;
+			}
+		}
+		
+		@Override
+		public <T extends Persistable> void persist(Set<T> entityCollection) {
+			if(entityCollection==null || entityCollection.size()==0)
+				return;
+			this.dataBase.beginTransaction();
+			BatchPersistenceException ex = null;
+			try {
+				for (T entity : entityCollection) {
+					ContentValues values = SqliteHelper.getContentValues(entity);
+					entity.setId(dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()),null,values));
+				}
+				this.dataBase.setTransactionSuccessful();
+			}
+			catch (Exception e) {
+				Log.e(TAG, "Rolling back batch insert, ERROR : "+e.getMessage());
+				for(T entity:entityCollection)
+					entity.setId(OrmConstants.NOT_PERSISTED_ID);
+				ex = new BatchPersistenceException(e.getMessage());
+			}
+			finally{
+				this.dataBase.endTransaction();
+				if(ex!=null)
+					throw ex;
+			}
+		}
+		@Override
 		public <T extends Persistable> T get(long systemId, Class<T> clazz) {
-			// TODO Auto-generated method stub
 			return null;
 		}
 		
 		@Override
 		public void setForeignKeySupport(boolean enabled) {
-			// TODO Auto-generated method stub
-			
-		}
-		
-		@Override
-		public void dropAll() {
-			// TODO Auto-generated method stub
-			
+			if (enabled)
+				this.dataBase.execSQL("PRAGMA foreign_keys = ON;");
+			else
+				this.dataBase.execSQL("PRAGMA foreign_keys = OFF;");
 		}
 		
 		@Override
@@ -157,15 +224,13 @@ public abstract class DatabaseAdapterFactory {
 		}
 		
 		@Override
-		public void drop(String... entityNames) {
-			// TODO Auto-generated method stub
-			
-		}
-		
-		@Override
 		public void delete(Persistable entity) {
-			// TODO Auto-generated method stub
-			
+			if (PersistenceUtil.isPersisted(entity))
+				throw new PersistenceException(entity, "Can not delete entity which was not saved to database ");
+			String entityName = PersistenceUtil.getEntityName(entity.getClass());
+			int rowNumber = dataBase.delete(entityName, OrmConstants.PRIMARY_KEY_COLUMN_NAME + " = " + entity.getId(), null);
+			if (rowNumber == 0)
+				throw new RecordNotFoundException(entity);
 		}
 		
 		@Override
@@ -179,9 +244,9 @@ public abstract class DatabaseAdapterFactory {
 		 * 
 		 * @author Hamza
 		 */
-		private class SqliteHelper extends SQLiteOpenHelper {
+		private class SqliteDatabaseHelper extends SQLiteOpenHelper {
 			
-			SqliteHelper() {
+			SqliteDatabaseHelper() {
 				super(context, DATABASE_NAME, null, DATABASE_VERSION);
 			}
 			
@@ -189,7 +254,7 @@ public abstract class DatabaseAdapterFactory {
 			public void onCreate(SQLiteDatabase db) {
 				dataBase.beginTransaction();
 				try {
-					for (String sql : registry.generateCreateStatements()) {
+					for (String sql : SqliteHelper.generateCreateStatements()) {
 						Log.i(TAG, sql);
 						dataBase.execSQL(sql);
 					}
@@ -206,7 +271,12 @@ public abstract class DatabaseAdapterFactory {
 			
 			@Override
 			public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-				
+				Log.w(TAG, "Upgrading database from version "+oldVersion+ " to "+newVersion+" current implementation will drop all tables ...");
+				for(String sql:SqliteHelper.generateDropStatements()){
+					Log.i(TAG, sql);
+					dataBase.execSQL(sql);
+				}
+				this.onCreate(db);	
 			}
 			
 		}

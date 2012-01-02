@@ -1,68 +1,95 @@
 package com.android.orm.adapter;
 
-import java.lang.reflect.Method;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Set;
 
 /**
  * keeps required data for an entity : *if it is dependent on other entities, *has indexes checks circular references. If there exist a circular reference between two entities @throws
- * CircularForeignKeyException
+ * CircularForeignKeyException an entity can map to multiple tables when Inheritence is JOINED
  * 
  * @author Hamza Gumrah
  */
 final class EntityMetaData {
 	
+	
+	private final Set<TableMetaData> mappedTables;
+	
+	private final Class<?> clazz;
 	/**
 	 * if this entity has foreign keys, it should dependent on other entities. we have to create dependentEntities first during database creation since Sqlite does not support ALTER TABLE add
 	 * constraint feature,
 	 * 
 	 * @see http://www.sqlite.org/omitted.html
+	 * 
+	 * if entity's mapped table or tables have foreign keys,cross tables than entity is dependent.
 	 */
-	final Map<String, ForeignKeyMetaData> dependentEntities;
+	private final boolean isDependent;
+	//table meta data does not cover below informations
+//	final Set<RelationalMetaData.ManyToManyMetaData> manyToMany;
+	/**
+	 * tables do not have oneToMany information we need to keep them in entity
+	 * during persistence oneToMany entities should be persist as well.
+	 * and during get, oneToMany entities should be fetched as well.
+	 */
+	private final Set<OneToManyMetaData> oneToMany;
+//	/**
+//	 * tables do not have oneToOne information we need to keep them in entity
+//	 * during persistence oneToMany entities should be persist as well.
+//	 * and during get, oneToMany entities should be fetched as well.
+//	 */
+//	private final Set<RelationalMetaData.OneToOneMetaData> oneToOne;
 	
-	final Map<String, ColumnMetaData> columns;
-	
-	PrimaryKeyMetaData primaryKeyMetaData;
-	
-	EntityMetaData() {
-		this.dependentEntities = new HashMap<String, ForeignKeyMetaData>(0);
-		this.columns = new HashMap<String, ColumnMetaData>();
-	}
-	
-	final void put(final String columnName, final ColumnMetaData columnMetaData) {
-		this.columns.put(columnName, columnMetaData);
-		if (columnMetaData.getForeignKeyMetaData() != null) {
-			this.dependentEntities.put(columnName, columnMetaData.getForeignKeyMetaData());
+	public EntityMetaData(Set<TableMetaData> mappedTables, Class<?> clazz,Set<OneToManyMetaData> oneToManies) {
+		this.mappedTables = mappedTables;
+		this.clazz = clazz;
+		this.oneToMany = oneToManies;
+		boolean dependent = false;
+		for (TableMetaData metaData : mappedTables) {
+			if (metaData.hasForeignKey()) {
+				dependent = true;
+				break;
+			}
+			else if(metaData.hasCrossTable()){
+				dependent = true;
+				break;
+			}
 		}
+		this.isDependent = dependent;
 	}
 	
-	final Set<String> columnNames() {
-		return this.columns.keySet();
+	/**
+	 * @return true if this entity depends on another entity
+	 */
+	final boolean isDependent() {
+		return this.isDependent;
 	}
-	
-	final Method columnGetter(String columnName) {
-		return this.columns.get(columnName).getGetter();
+
+	/**
+	 * 
+	 * @return if Inheritence is SingleTable will return one table , which is the reflection of 
+	 * entity in database,
+	 * else if Joined table will return a table set, which are chained to each other on parent-child
+	 * relation.
+	 */
+	public Set<TableMetaData> getMappedTables() {
+		return mappedTables;
 	}
-	
-	final Method columnSetter(String columnName) {
-		return this.columns.get(columnName).getSetter();
+
+	/**
+	 * 
+	 * @return class of the entity
+	 */
+	public Class<?> getClazz() {
+		return clazz;
 	}
-	
-	final boolean hasDependetEntity() {
-		return this.dependentEntities.size() > 0;
+
+	/**
+	 * tables do not have oneToMany information we need to keep them in entity
+	 * during persistence oneToMany entities should be persist as well.
+	 * and during get, oneToMany entities should be fetched as well.
+	 * @return OneToMany entities
+	 */
+	public Set<OneToManyMetaData> getOneToMany() {
+		return oneToMany;
 	}
-	
-	public Map<String, ForeignKeyMetaData> getDependentEntities() {
-		return dependentEntities;
-	}
-	
-	public Map<String, ColumnMetaData> getColumns() {
-		return columns;
-	}
-	
-	public PrimaryKeyMetaData getPrimaryKeyMetaData() {
-		return primaryKeyMetaData;
-	}
-	
+
 }

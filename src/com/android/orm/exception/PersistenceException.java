@@ -4,9 +4,9 @@ import com.android.orm.Persistable;
 
 public class PersistenceException extends RuntimeException {
 	
-	private final String message;
+	protected final String message;
 	
-	private final Persistable persistable;
+	protected final Persistable persistable;
 	
 	private static final long serialVersionUID = 1L;
 	

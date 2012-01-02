@@ -1,10 +1,9 @@
 package com.android.orm.util;
 
-import java.lang.reflect.Modifier;
 import java.sql.Date;
 
+import com.android.orm.OrmConstants;
 import com.android.orm.Persistable;
-import com.android.orm.annotation.AbstractEntity;
 import com.android.orm.annotation.Entity;
 import com.android.orm.exception.EntityViolation;
 import com.android.orm.exception.UnsupportedFieldTypeException;
@@ -19,29 +18,19 @@ public abstract class PersistenceUtil {
 	public static boolean isEntity(Class<?> clazz) {
 		if (!clazz.isAnnotationPresent(Entity.class))
 			return false;
-		if (Modifier.isAbstract(clazz.getModifiers()))
-			throw new EntityViolation(clazz.getName(), "Abstract classes not allowed to have @Entity Annotation, use @AbstractEntity");
 		return true;
 	}
 	
-	public static boolean isAbstractEntity(Class<?> clazz) {
-		if (Modifier.isAbstract(clazz.getModifiers()) && clazz.isAnnotationPresent(AbstractEntity.class))
-			return true;
-		return false;
+	/**
+	 * @param obj
+	 * @return if entity is persisted to database or not.
+	 */
+	public static boolean isPersisted(Persistable obj) {
+		if (obj.getId() == OrmConstants.NOT_PERSISTED_ID)
+			return false;
+		return true;
 	}
 	
-	/**
-	 * @param clazz
-	 * @return gets Entity Annotation of the clazz and returns its name() if exists else return clazz.getSimpleName()
-	 */
-	public static String getEntityName(Class<?> clazz) {
-		isEntity(clazz);
-		Entity e = clazz.getAnnotation(Entity.class);
-		if (e.name().equals(""))
-			return clazz.getSimpleName();
-		else
-			return e.name();
-	}
 	
 	/**
 	 * checks if Persistable.class.isAssignableFrom(clazz)
@@ -80,9 +69,9 @@ public abstract class PersistenceUtil {
 			return;
 		if (Enum.class.isAssignableFrom(fieldType))
 			return;
-		if (Persistable.class.isAssignableFrom(fieldType))
+		if (isPersistable(fieldType) && isEntity(fieldType))
 			return;
-		if (Date.class.isAssignableFrom(fieldType))
+		if (isDate(fieldType))
 			return;
 		throw new UnsupportedFieldTypeException(fieldType.getName());
 	}

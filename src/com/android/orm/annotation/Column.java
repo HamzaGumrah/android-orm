@@ -7,13 +7,15 @@ import java.lang.annotation.Target;
 
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
+/**
+ * Each Column field should have a getter and setter method. 
+ * 
+ */
 public @interface Column {
 	
 	String name() default "";
 	
 	boolean nullable() default true;
-	
-	boolean unique() default false;
 	
 	/**
 	 * @return length value for String fields

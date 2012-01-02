@@ -2,6 +2,7 @@ package com.android.orm.adapter;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 
 import com.android.orm.Persistable;
 
@@ -27,25 +28,32 @@ public interface DatabaseAdapter {
 	 */
 	void setForeignKeySupport(boolean enabled);
 	
-	/**
-	 * drops all tables in a single transaction
-	 */
-	void dropAll();
-	
-	/**
-	 * drops specified entities from database in a single transaction. if there are foreignkeys it will throw an exception.
-	 * 
-	 * @param entityNames @Entity.name() list
-	 */
-	void drop(String... entityNames);
 	
 	/**
 	 * inserts an entity to database
 	 * 
 	 * @param entity
+	 * @throws PersistenceException
 	 */
 	<T extends Persistable> void persist(T entity);
 	
+	/**
+	 * inserts entities to database in a single transaction
+	 * roll backs if any exception occurs
+	 * @param <T>
+	 * @param entityCollection if entityCollection is null or has no records than returns. 
+	 * @throws PersistenceException
+	 */
+	<T extends Persistable> void persist(Collection<T> entityCollection);
+	
+	/**
+	 * inserts entities to database in a single transaction
+	 * roll backs if any exception occurs
+	 * @param <T>
+	 * @param entitySet if entitySet is null or has no records than returns.
+	 * @throws PersistenceException
+	 */
+	<T extends Persistable> void persist(Set<T> entitySet);
 	/**
 	 * @param systemId
 	 * @param clazz

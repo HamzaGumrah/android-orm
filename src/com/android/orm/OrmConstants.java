@@ -22,4 +22,8 @@ public interface OrmConstants {
 	public static final String SQLITE_DATE = "INTEGER";
 	
 	public static final String SQLITE_REAL = "REAL";
+	/**
+	 * if entity is not persisted getId() should return 0
+	 */
+	public static final long NOT_PERSISTED_ID = 0;
 }

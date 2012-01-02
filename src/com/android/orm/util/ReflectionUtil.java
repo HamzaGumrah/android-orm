@@ -7,10 +7,9 @@ import java.util.HashSet;
 import java.util.Set;
 
 import com.android.orm.annotation.Column;
-import com.android.orm.annotation.PrimaryKey;
 import com.android.orm.exception.EntityNotFoundException;
 import com.android.orm.exception.MultiplePrimaryKeyException;
-import com.android.orm.exception.UnsupportedPrimaryKeyTypeException;
+import com.android.orm.exception.UnsupportedPrimaryKeyException;
 
 public abstract class ReflectionUtil {
 	
@@ -85,7 +84,7 @@ public abstract class ReflectionUtil {
 	/**
 	 * @param clazz
 	 * @return declared fields which are annotated as @Column and @PrimaryKey in clazz and its super classes. Super classes should also have @Entity or @AbstractEntity annotation else search will
-	 *         terminated. If clazz has not @Entity annotation returns null
+	 *         be terminated. If clazz has not @Entity annotation returns null
 	 * @throws MultiplePrimaryKeyException
 	 */
 	public static Set<Field> getDeclaredColumns(final Class<?> clazz) throws MultiplePrimaryKeyException, EntityNotFoundException {
@@ -100,7 +99,7 @@ public abstract class ReflectionUtil {
 						throw new MultiplePrimaryKeyException(entityName);
 					hasPrimaryKey = true;
 					if (!Long.class.isAssignableFrom(field.getClass()))
-						throw new UnsupportedPrimaryKeyTypeException(field.getClass().getName());
+						throw new UnsupportedPrimaryKeyException(field.getClass().getName());
 					fields.add(field);
 				}
 				if (field.isAnnotationPresent(Column.class)) {
@@ -109,7 +108,8 @@ public abstract class ReflectionUtil {
 			}
 			type = type.getSuperclass();
 			// if super class is still an entity or abstract entity continue
-			if ((PersistenceUtil.isEntity(type) && PersistenceUtil.isPersistable(clazz)) || PersistenceUtil.isAbstractEntity(type))
+			//TODO
+			if ((PersistenceUtil.isEntity(type) && PersistenceUtil.isPersistable(clazz)))
 				continue;
 			else
 				break;

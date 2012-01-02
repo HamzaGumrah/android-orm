@@ -24,8 +24,15 @@ final class ColumnMetaData {
 	
 	private final boolean isDate;
 	
+	private final String name;
+	
 	ColumnMetaData(Column self, Method getMethod, Method setMethod, ForeignKeyMetaData foreignKeyMetaData, Class<?> fieldType) {
+		this(self,getMethod,setMethod,foreignKeyMetaData,fieldType,self.name());
+	}
+	ColumnMetaData(Column self, Method getMethod, Method setMethod, ForeignKeyMetaData foreignKeyMetaData, Class<?> fieldType,String name) {
 		super();
+		if(name.equals(""))
+			throw new InstantiationError("Column name must defined");
 		this.isDate = PersistenceUtil.isDate(fieldType);
 		this.self = self;
 		this.getMethod = getMethod;
@@ -36,8 +43,8 @@ final class ColumnMetaData {
 			this.sqliteFieldType = SqliteHelper.getSqliteTypeName(this.foreignKeyMetaData.getReferenceFieldType());
 		else
 			this.sqliteFieldType = SqliteHelper.getSqliteTypeName(fieldType);
+		this.name = name;
 	}
-	
 	final boolean isNullable() {
 		return self.nullable();
 	}
@@ -72,5 +79,9 @@ final class ColumnMetaData {
 	
 	final int length() {
 		return self.length();
+	}
+	
+	final String getColumnName() {
+		return this.name;
 	}
 }

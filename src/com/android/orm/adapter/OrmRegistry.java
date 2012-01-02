@@ -3,14 +3,12 @@ package com.android.orm.adapter;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import android.content.ContentValues;
 import android.util.Log;
 
 import com.android.orm.OrmConstants;
@@ -18,16 +16,13 @@ import com.android.orm.Persistable;
 import com.android.orm.annotation.Column;
 import com.android.orm.annotation.Entity;
 import com.android.orm.annotation.ForeignKey;
-import com.android.orm.annotation.PrimaryKey;
-import com.android.orm.exception.CircularReferenceException;
-import com.android.orm.exception.ColumnNotNullableException;
 import com.android.orm.exception.DublicatedEntityNameException;
+import com.android.orm.exception.EntityNotFoundException;
 import com.android.orm.exception.MultiplePrimaryKeyException;
+import com.android.orm.exception.PersistableNotFoundException;
 import com.android.orm.exception.PrimaryKeyNotFoundException;
-import com.android.orm.exception.UnRegisteredEntityException;
-import com.android.orm.exception.UnsupportedFieldTypeException;
 import com.android.orm.exception.UnsupportedForeignKeyReferenceException;
-import com.android.orm.exception.UnsupportedPrimaryKeyTypeException;
+import com.android.orm.exception.UnsupportedPrimaryKeyException;
 import com.android.orm.util.PersistenceUtil;
 import com.android.orm.util.ReflectionUtil;
 
@@ -50,14 +45,17 @@ final class OrmRegistry {
 	 * @throws NoSuchMethodException if getter or setter method is missing for any @Column field of the entity
 	 * @throws SecurityException if getter or setter method is not public for any @Column field of the entity
 	 */
-	public OrmRegistry(String... qualifiedEntityNames) throws ClassNotFoundException, SecurityException, NoSuchMethodException {
+	public OrmRegistry(Set<String> qualifiedEntityNames) throws ClassNotFoundException, SecurityException, NoSuchMethodException {
 		this.registryMap = new HashMap<String, EntityMetaData>();
 		for (String entityQualifiedName : qualifiedEntityNames) {
 			Class<?> clazz = Class.forName(entityQualifiedName);
 			// checks if target classes has Entity annotation
-			PersistenceUtil.isEntity(clazz);
+			if (!PersistenceUtil.isEntity(clazz))
+				throw new EntityNotFoundException(entityQualifiedName);
 			// checks if target classes implemented Persistable
-			PersistenceUtil.isPersistable(clazz);
+			if (PersistenceUtil.isPersistable(clazz))
+				throw new PersistableNotFoundException(entityQualifiedName);
+			
 			Entity e = clazz.getAnnotation(Entity.class);
 			String entityName = e.name();
 			if (e.name().equals("")) {
@@ -67,18 +65,34 @@ final class OrmRegistry {
 			if (this.registryMap.containsKey(entityName)) {
 				throw new DublicatedEntityNameException(entityName);
 			}
-			Field[] fields = clazz.getDeclaredFields();
-			EntityMetaData entityMetaData = new EntityMetaData();
-			boolean hasPrimaryKey = false;
+			EntityMetaData entityMetaData = constructEntityMetaData(clazz, entityName);
+			this.registryMap.put(entityName, entityMetaData);
+		}
+	}
+	
+	/**
+	 * helper method for constructor, finds declared fields of clazz and its superclasses. If fields have @Column,@ForeingKey,@ManyToMany e.t.c annotations adds them to metaData
+	 * 
+	 * @param clazz
+	 * @return generated entityMetaData for clazz.
+	 * @throws NoSuchMethodException
+	 * @throws SecurityException
+	 */
+	final EntityMetaData constructEntityMetaData(final Class<?> clazz, final String entityName) throws SecurityException, NoSuchMethodException {
+		
+		Class<?> type = clazz;
+		EntityMetaData entityMetaData = new EntityMetaData();
+		boolean hasPrimaryKey = false;
+		while (Object.class.equals(type)) {
+			Field[] fields = type.getDeclaredFields();
 			for (Field field : fields) {
-				// if a field has PrimaryKey annotation override its @Column annotation
 				if (field.isAnnotationPresent(PrimaryKey.class)) {
 					if (hasPrimaryKey)
 						throw new MultiplePrimaryKeyException(entityName);
 					else
 						hasPrimaryKey = true;
 					if (!Long.class.isAssignableFrom(field.getClass()))
-						throw new UnsupportedPrimaryKeyTypeException(field.getClass().getName());
+						throw new UnsupportedPrimaryKeyException(field.getClass().getName());
 					
 					Method getMethod = ReflectionUtil.findGetMethod(clazz, OrmConstants.PRIMARY_KEY_FIELD_NAME);
 					Method setMethod = ReflectionUtil.findSetMethod(clazz, Long.class, OrmConstants.PRIMARY_KEY_FIELD_NAME);
@@ -97,8 +111,10 @@ final class OrmRegistry {
 					// if Column is also a foreign key
 					ForeignKeyMetaData foreignKeyMetaData = null;
 					if (field.isAnnotationPresent(ForeignKey.class)) {
-						PersistenceUtil.isPersistable(field.getClass());
-						PersistenceUtil.isEntity(field.getClass());
+						if(PersistenceUtil.isPersistable(field.getClass())&&PersistenceUtil.isEntity(field.getClass()))
+							;
+						else
+							Log.w(TAG, entityName+" ForeignKey field is not Persistable or Entity underestimating ... ");
 						
 						String foreignKeyReference = field.getAnnotation(ForeignKey.class).reference();
 						if (!foreignKeyReference.equals(OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE)) {
@@ -116,268 +132,64 @@ final class OrmRegistry {
 					entityMetaData.put(columnName, new ColumnMetaData(column, getMethod, setMethod, foreignKeyMetaData, field.getClass()));
 				}
 			}
-			if (!hasPrimaryKey)
-				throw new PrimaryKeyNotFoundException(entityName);
-			this.registryMap.put(entityName, entityMetaData);
 		}
-	}
-	
-	// ###########################################################################################################
-	// END OF CONSTRUCTOR
-	// ###########################################################################################################
-	
-	// ###########################################################################################################
-	// GENERATE STATEMENTS FOR DATABASE INITIALIZATION
-	// Creating Create Table statements is essential, Sqlite ALTER TABLE can not add a foreign key constraint, hence we need to define each foreign key inside CREATE TABLE statement
-	// Therefore, CRATE TABLE statements should be in a correct order.
-	// ###########################################################################################################
-	/**
-	 * @return generated create statements for database
-	 */
-	public final String[] generateCreateStatements() {
-		Collection<String> statements = new ArrayList<String>();
-		// set foreign keys off at first
-		statements.add("PRAGMA foreign_keys = OFF;");
-		// first generate create table statements for entities which do not have any foreign key.
-		Set<String> generatedEntities = this.generateCreateStatementsForNondependents(statements);
-		if (generatedEntities.size() == 0)
-			throw new CircularReferenceException("All entities has dependency , required at least 1 entity without foreign key");
-		
-		this.generateCreateStatementsForDependents(statements, generatedEntities);
-		statements.add("PRAGMA foreign_keys = ON;");
-		return statements.toArray(new String[0]);
-	}
-	
-	/**
-	 * add create table statement for entities which do not depent on another entity
-	 * 
-	 * @param statements
-	 */
-	private final Set<String> generateCreateStatementsForNondependents(final Collection<String> statements) {
-		Set<String> result = new HashSet<String>();
-		for (String entityName : this.registryMap.keySet()) {
-			EntityMetaData entityMetaData = this.registryMap.get(entityName);
-			// if this is a dependent entity continue
-			if (entityMetaData.hasDependetEntity())
-				continue;
-			StringBuilder sqlBuilder = new StringBuilder();
-			addCreateStatementHeader(sqlBuilder, entityName);
-			for (String columnName : entityMetaData.columnNames()) {
-				ColumnMetaData columnMetaData = entityMetaData.columns.get(columnName);
-				sqlBuilder.append(", ");
-				sqlBuilder.append(columnName);
-				sqlBuilder.append(" " + columnMetaData.getSqliteFieldType());
-				// if length value is specified for Text attr
-				if (columnMetaData.getSqliteFieldType().equals(OrmConstants.SQLITE_TEXT) && columnMetaData.length() > 0)
-					sqlBuilder.append("(" + columnMetaData.length() + ")");
+		for (Field field : fields) {
+			// if a field has PrimaryKey annotation override its @Column annotation
+			if (field.isAnnotationPresent(PrimaryKey.class)) {
+				if (hasPrimaryKey)
+					throw new MultiplePrimaryKeyException(entityName);
+				else
+					hasPrimaryKey = true;
+				if (!Long.class.isAssignableFrom(field.getClass()))
+					throw new UnsupportedPrimaryKeyException(field.getClass().getName());
+				
+				Method getMethod = ReflectionUtil.findGetMethod(clazz, OrmConstants.PRIMARY_KEY_FIELD_NAME);
+				Method setMethod = ReflectionUtil.findSetMethod(clazz, Long.class, OrmConstants.PRIMARY_KEY_FIELD_NAME);
+				entityMetaData.primaryKeyMetaData = new PrimaryKeyMetaData(field.getAnnotation(PrimaryKey.class).orderby(), getMethod, setMethod);
 			}
-			sqlBuilder.append(", PRIMARY KEY(");
-			sqlBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
-			sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.getOrderType() + ")");
-			sqlBuilder.append(");");
-			statements.add(sqlBuilder.toString());
-			result.add(entityName);
-		}
-		return result;
-	}
-	
-	/**
-	 * creates Create Table statements for entities and add them to statements collection. if a create table statement already generated for entity skips it.
-	 * 
-	 * @param statements
-	 * @param generatedEntities
-	 */
-	private final void generateCreateStatementsForDependents(final Collection<String> statements, final Set<String> generatedEntities) {
-		// to avoid re-generate create statement for an entity again.
-		
-		for (String entityName : this.registryMap.keySet()) {
-			EntityMetaData entityMetaData = this.registryMap.get(entityName);
-			// non dependent entities already created in another generateCreateStatementsForNondependents
-			if (!entityMetaData.hasDependetEntity() || generatedEntities.contains(entityName))
-				continue;
-			this.generateCreateStatement(entityName, statements, generatedEntities);
-		}
-	}
-	
-	/**
-	 * recursive method , generates create statements for an entity and its dependent entities.
-	 * 
-	 * @param entityName
-	 * @param statements
-	 * @param generatedEntities
-	 */
-	private final void generateCreateStatement(final String entityName, final Collection<String> statements, final Set<String> generatedEntities) {
-		EntityMetaData entityMetaData = this.registryMap.get(entityName);
-		if (entityMetaData == null)
-			throw new UnRegisteredEntityException(entityName);
-		// first generate create statements for dependentEntities
-		for (ForeignKeyMetaData foreignKeyMetaData : entityMetaData.dependentEntities.values()) {
-			// if create statement already generated for dependent entity skip it
-			if (generatedEntities.contains(foreignKeyMetaData.getReferenceEntityName()))
-				continue;
-			// if create statement not generated , generate its statement before this one.
-			generateCreateStatement(foreignKeyMetaData.getReferenceEntityName(), statements, generatedEntities);
-		}
-		// after generating create statements for all dependents , we can continue for this entity
-		StringBuilder sqlBuilder = new StringBuilder();
-		addCreateStatementHeader(sqlBuilder, entityName);
-		for (String columnName : entityMetaData.columnNames()) {
-			ColumnMetaData columnMetaData = entityMetaData.columns.get(columnName);
-			sqlBuilder.append(", ");
-			sqlBuilder.append(columnName);
-			sqlBuilder.append(" " + columnMetaData.getSqliteFieldType());
-			// if length value is specified for Text attr
-			if (columnMetaData.getSqliteFieldType().equals(OrmConstants.SQLITE_TEXT) && columnMetaData.length() > 0)
-				sqlBuilder.append("(" + columnMetaData.length() + ")");
-		}
-		// Primary Key definition
-		sqlBuilder.append(", PRIMARY KEY(");
-		sqlBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
-		sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.getOrderType() + ")");
-		// foreign key definitions
-		for (String columnName : entityMetaData.dependentEntities.keySet()) {
-			sqlBuilder.append(", FOREIGN KEY(");
-			sqlBuilder.append(columnName);
-			sqlBuilder.append(") REFERENCES ");
-			ForeignKeyMetaData foreignKeyMetaData = entityMetaData.dependentEntities.get(columnName);
-			sqlBuilder.append(foreignKeyMetaData.getReferenceEntityName());
-			sqlBuilder.append("(" + foreignKeyMetaData.getReferenceColumnName() + ")");
-		}
-		
-		sqlBuilder.append(");");
-		generatedEntities.add(entityName);
-		statements.add(sqlBuilder.toString());
-	}
-	
-	/**
-	 * adds a must have header to each create statement
-	 * 
-	 * @param sqlBuilder
-	 * @param entityName
-	 */
-	private final void addCreateStatementHeader(final StringBuilder sqlBuilder, final String entityName) {
-		sqlBuilder.append("CREATE TABLE ");
-		sqlBuilder.append(entityName.toUpperCase());
-		sqlBuilder.append("(");
-		sqlBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
-		sqlBuilder.append(" INTEGER");
-	}
-	
-	// ###########################################################################################################
-	// END OF GENERATE STATEMENTS FOR DATABASE INITIALIZATION
-	// ###########################################################################################################
-	/**
-	 * gets value of the column. If entity is not registered throws @see UnRegisteredEntityException
-	 * 
-	 * @param entity
-	 * @param columnName
-	 * @return
-	 * @throws IllegalArgumentException
-	 * @throws IllegalAccessException
-	 * @throws InvocationTargetException
-	 */
-	public final Object getValueOfColumn(final Entity entity, final String columnName) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException {
-		String key = entity.name();
-		if (key.equals(""))
-			key = entity.getClass().getSimpleName();
-		EntityMetaData entityMetaData = this.registryMap.get(key);
-		if (entityMetaData == null)
-			throw new UnRegisteredEntityException(entity.name());
-		return entityMetaData.columnGetter(columnName).invoke(entity);
-	}
-	
-	/**
-	 * @param qualifiedName
-	 * @param fieldName
-	 */
-	public final void setValueOf(final String entityName, final String columnName, final Object value) {
-		
-	}
-	
-	/**
-	 * gets values of each field
-	 * 
-	 * @return <column.name(),value> map.
-	 * @throws InvocationTargetException
-	 * @throws IllegalAccessException
-	 * @throws IllegalArgumentException
-	 */
-	public final Map<String, Object> getValues(final Persistable obj) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException {
-		String entityName = PersistenceUtil.getEntityName(obj.getClass());
-		EntityMetaData metaData = this.registryMap.get(entityName);
-		if (metaData == null)
-			throw new UnRegisteredEntityException(entityName);
-		Map<String, Object> result = new HashMap<String, Object>();
-		for (String columnName : metaData.columns.keySet())
-			result.put(columnName, metaData.columnGetter(columnName).invoke(obj));
-		return result;
-	}
-	
-	/**
-	 * @param entity
-	 * @return ContentValues which will be used in SqliteDatabase.insert method
-	 * @throws InvocationTargetException
-	 * @throws IllegalAccessException
-	 * @throws IllegalArgumentException
-	 * @throws NoSuchMethodException
-	 * @throws SecurityException
-	 */
-	public final ContentValues getContentValues(final Persistable obj) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException, SecurityException, NoSuchMethodException {
-		
-		String entityName = PersistenceUtil.getEntityName(obj.getClass());
-		
-		EntityMetaData entityMetaData = this.registryMap.get(entityName);
-		if (entityMetaData == null)
-			throw new UnRegisteredEntityException(entityName);
-		
-		ContentValues values = new ContentValues();
-		for (String columnName : entityMetaData.columns.keySet())
-			this.addToContent(values, columnName, entityMetaData.columnGetter(columnName).invoke(obj), entityMetaData.columns.get(columnName));
-		
-		return values;
-	}
-	
-	/**
-	 * @throws NoSuchMethodException
-	 * @throws InvocationTargetException
-	 * @throws IllegalAccessException
-	 * @throws SecurityException
-	 * @throws IllegalArgumentException
-	 */
-	private final void addToContent(final ContentValues values, final String columnName, final Object value, final ColumnMetaData columnMetaData) throws IllegalArgumentException, SecurityException, IllegalAccessException, InvocationTargetException, NoSuchMethodException {
-		if (value == null && !columnMetaData.isNullable())
-			throw new ColumnNotNullableException(columnName);
-		if (value == null)
-			return;
-		else if (value instanceof String)
-			values.put(columnName, (String) value);
-		else if (value instanceof Long)
-			values.put(columnName, (Long) value);
-		else if (value instanceof Integer)
-			values.put(columnName, (Integer) value);
-		else if (value instanceof Short)
-			values.put(columnName, (Short) value);
-		else if (value instanceof Byte)
-			values.put(columnName, (Byte) value);
-		else if (value instanceof Boolean)
-			values.put(columnName, (Boolean) value);
-		else if (value instanceof Double)
-			values.put(columnName, (Double) value);
-		else if (value instanceof Float)
-			values.put(columnName, (Float) value);
-		else if (value instanceof byte[])
-			values.put(columnName, (byte[]) value);
-		else if (Enum.class.isAssignableFrom(value.getClass()))
-			values.put(columnName, Enum.class.cast(value).name());
-		else if (value instanceof Persistable) {
-			if (columnMetaData.isForeignKey() && !columnMetaData.getForeignKeyMetaData().getReferenceFieldName().equals(OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE)) {
-				this.addToContent(values, columnName, ReflectionUtil.invokeGetMethod(value, columnMetaData.getForeignKeyMetaData().getReferenceFieldName(), columnMetaData.getForeignKeyMetaData().getReferenceFieldType()), columnMetaData);
+			else if (field.isAnnotationPresent(Column.class)) {
+				// check if fieldType supported
+				PersistenceUtil.isFieldTypeSupported(field.getClass());
+				Column column = field.getAnnotation(Column.class);
+				
+				String columnName = column.name();
+				if (columnName.equals("")) {
+					Log.w(TAG, "Columns strongly couraged to have name(), else fieldName will be mapped as column name ");
+					columnName = field.getName();
+				}
+				// if Column is also a foreign key
+				ForeignKeyMetaData foreignKeyMetaData = null;
+				if (field.isAnnotationPresent(ForeignKey.class)) {
+					PersistenceUtil.isPersistable(field.getClass());
+					PersistenceUtil.isEntity(field.getClass());
+					
+					String foreignKeyReference = field.getAnnotation(ForeignKey.class).reference();
+					if (!foreignKeyReference.equals(OrmConstants.DEFAULT_FOREIGN_KEY_REFERENCE)) {
+						Class<?> referenceType = ReflectionUtil.findFieldType(field.getClass(), foreignKeyReference);
+						if (!PersistenceUtil.isForeignKeyReferenceSupported(referenceType))
+							throw new UnsupportedForeignKeyReferenceException(entityName, field.getName(), foreignKeyReference, referenceType.getName());
+						foreignKeyMetaData = new ForeignKeyMetaData(PersistenceUtil.getEntityName(field.getClass()), columnName, foreignKeyReference, referenceType);
+					}
+					else
+						foreignKeyMetaData = new ForeignKeyMetaData(PersistenceUtil.getEntityName(field.getClass()));
+				}
+				
+				Method getMethod = ReflectionUtil.findGetMethod(clazz, field.getName());
+				Method setMethod = ReflectionUtil.findSetMethod(clazz, field.getClass(), field.getName());
+				entityMetaData.put(columnName, new ColumnMetaData(column, getMethod, setMethod, foreignKeyMetaData, field.getClass()));
 			}
-			else
-				values.put(columnName, ((Persistable) value).getId());
 		}
-		else
-			throw new UnsupportedFieldTypeException(value.getClass().getName());
+		if (!hasPrimaryKey)
+			throw new PrimaryKeyNotFoundException(entityName);
+		return entityMetaData;
+	}
+	
+	final Map<String, EntityMetaData> getRegistryData() {
+		return this.registryMap;
+	}
+	
+	final EntityMetaData getEntityMetaData(String entityName) {
+		return this.registryMap.get(entityName);
 	}
 	
 }
