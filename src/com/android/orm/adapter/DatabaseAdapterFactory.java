@@ -33,7 +33,7 @@ public abstract class DatabaseAdapterFactory {
 	/**
 	 * shared metadata for all adapters. initiliazed at first adapter generation
 	 */
-	private static OrmRegistry registry = null;
+	private static Registry registry = null;
 	
 	/**
 	 * Use this method for initializing SqliteAdapter
@@ -54,7 +54,7 @@ public abstract class DatabaseAdapterFactory {
 						Set<String> entityNames = new HashSet<String>();
 						for(String name:entityQualifiedNames)
 							entityNames.add(name);
-						registry = new OrmRegistry(entityNames);
+						registry = new Registry(entityNames);
 						adapter = self.newAdapter(ctx, databaseName, databaseVersion);
 						adapter.open();
 					}
@@ -75,17 +75,27 @@ public abstract class DatabaseAdapterFactory {
 		return adapter;
 	}
 	
-	static final Map<String, EntityMetaData> getRegistryData() {
+	static final Map<String, EntityMetaData> getEntityRegistry() {
 		if (registry == null)
 			throw new IllegalArgumentException("Registry information is not sufficient");
-		return registry.getRegistryData();
+		return registry.getEntityRegistry();
 	}
-	
 	static final EntityMetaData getEntityMetaData(String entityName) {
 		if (registry == null)
 			throw new IllegalArgumentException("Registry information is not sufficient");
 		return registry.getEntityMetaData(entityName);
 	}
+	static final Map<String, TableMetaData> getTableRegistry() {
+		if (registry == null)
+			throw new IllegalArgumentException("Registry information is not sufficient");
+		return registry.getTableRegistry();
+	}
+	static final TableMetaData getTableMetaData(String tableName) {
+		if (registry == null)
+			throw new IllegalArgumentException("Registry information is not sufficient");
+		return registry.getTableMetaData(tableName);
+	}
+	
 	
 	/**
 	 * when multi thread operations needed, open another connection to database using a new adapter. it is essential to close additional adapters after usage.
@@ -144,8 +154,13 @@ public abstract class DatabaseAdapterFactory {
 		@Override
 		public <T extends Persistable> void persist(T entity) {
 			try {
-				ContentValues values = SqliteHelper.getContentValues(entity);
-				long id = dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()), null, values);
+				Map<String,ContentValues> values = SqliteHelper.getContentValues(entity);
+				long id = 0;
+				//TODO id should be primary key value of main table
+				for(String tableName : values.keySet()){
+					id = dataBase.insert(tableName, null, values.get(tableName));
+				}
+			
 				entity.setId(id);
 			}
 			catch (Exception e) {
@@ -161,7 +176,10 @@ public abstract class DatabaseAdapterFactory {
 			this.dataBase.beginTransaction();
 			try {
 				for (T entity : entityCollection) {
-					ContentValues values = SqliteHelper.getContentValues(entity);
+					Map<String,ContentValues> values = SqliteHelper.getContentValues(entity);
+					for(String key:values.keySet()){
+						
+					}
 					entity.setId(dataBase.insert(PersistenceUtil.getEntityName(entity.getClass()),null,values));
 				}
 				this.dataBase.setTransactionSuccessful();

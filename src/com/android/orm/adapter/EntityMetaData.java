@@ -91,5 +91,12 @@ final class EntityMetaData {
 	public Set<OneToManyMetaData> getOneToMany() {
 		return oneToMany;
 	}
+	/**
+	 * 
+	 * @return number of tables which this entity reflected
+	 */
+	public int getTableCount(){
+		return this.mappedTables.size();
+	}
 
 }

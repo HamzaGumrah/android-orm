@@ -61,22 +61,21 @@ abstract class SqliteHelper {
 		Set<String> statements = new HashSet<String>();
 		// set foreign keys off at first
 		statements.add("PRAGMA foreign_keys = OFF;");
-		// keeps entity names which already have create statements
-		Set<String> generatedEntities = new HashSet<String>();
+		// keeps table names which already have create statements
+		Set<String> generatedTables = new HashSet<String>();
 		// first create statements for non dependent entities which does not have any foreign key.
 		boolean hasNonDependentEntity = false;
-		for (String entityName : DatabaseAdapterFactory.getRegistryData().keySet()) {
-			EntityMetaData entityMetaData = DatabaseAdapterFactory.getEntityMetaData(entityName);
-			// if this is a dependent entity continue
-			if (entityMetaData.hasDependetEntity())
+		for (String tableName : DatabaseAdapterFactory.getTableRegistry().keySet()) {
+			TableMetaData tableMetaData = DatabaseAdapterFactory.getTableMetaData(tableName);
+			// if this is a dependent table continue , child tables depend on parents
+			if (tableMetaData.hasForeignKey() || tableMetaData.isChild())
 				continue;
 			hasNonDependentEntity = true;
 			StringBuilder sqlBuilder = new StringBuilder();
-			addCreateStatementHeader(sqlBuilder, entityName);
-			for (String columnName : entityMetaData.columnNames()) {
-				ColumnMetaData columnMetaData = entityMetaData.columns.get(columnName);
+			addCreateStatementHeader(sqlBuilder, tableName);
+			for (ColumnMetaData columnMetaData : tableMetaData.getColumns()) {
 				sqlBuilder.append(", ");
-				sqlBuilder.append(columnName);
+				sqlBuilder.append(columnMetaData.getColumnName());
 				sqlBuilder.append(" " + columnMetaData.getSqliteFieldType());
 				// if length value is specified for Text attr
 				if (columnMetaData.getSqliteFieldType().equals(OrmConstants.SQLITE_TEXT) && columnMetaData.length() > 0)
@@ -84,20 +83,20 @@ abstract class SqliteHelper {
 			}
 			sqlBuilder.append(", PRIMARY KEY(");
 			sqlBuilder.append(OrmConstants.PRIMARY_KEY_COLUMN_NAME);
-			sqlBuilder.append(" " + entityMetaData.primaryKeyMetaData.getOrderType() + ")");
+			sqlBuilder.append(" ASC )");
 			sqlBuilder.append(");");
 			statements.add(sqlBuilder.toString());
-			generatedEntities.add(entityName);
+			generatedTables.add(tableName);
 		}
 		// if all entities have foreing keys than its not possible to create tables
 		if (!hasNonDependentEntity)
-			throw new CircularReferenceException("All entities has dependency , required at least 1 entity without foreign key");
+			throw new CircularReferenceException("All tables have foreign keys , required at least 1 table without foreign key");
 		// create statements for dependent entities
-		for (String entityName : DatabaseAdapterFactory.getRegistryData().keySet()) {
-			EntityMetaData entityMetaData = DatabaseAdapterFactory.getEntityMetaData(entityName);
-			if (!entityMetaData.hasDependetEntity() || generatedEntities.contains(entityName))
+		for (String tableName : DatabaseAdapterFactory.getTableRegistry().keySet()) {
+			TableMetaData tableMetaData = DatabaseAdapterFactory.getTableMetaData(tableName);
+			if (!tableMetaData.hasForeignKey() || generatedTables.contains(tableName))
 				continue;
-			generateCreateStatement(entityName, statements, generatedEntities);
+			generateCreateStatement(tableName, statements, generatedTables);
 		}
 		statements.add("PRAGMA foreign_keys = ON;");
 		return statements;
@@ -177,24 +176,28 @@ abstract class SqliteHelper {
 	// ###########################################################################################################
 	/**
 	 * @param entity
-	 * @return ContentValues which will be used in SqliteDatabase.insert method
+	 * @return <String,ContentValues> which will be used in SqliteDatabase.insert method , key contains table name
 	 * @throws InvocationTargetException
 	 * @throws IllegalAccessException
 	 * @throws IllegalArgumentException
 	 * @throws NoSuchMethodException
 	 * @throws SecurityException
 	 */
-	static final ContentValues getContentValues(final Persistable obj) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException, SecurityException, NoSuchMethodException {
+	static final Map<String,ContentValues> getContentValues(final Persistable obj) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException, SecurityException, NoSuchMethodException {
 		
-		String entityName = PersistenceUtil.getEntityName(obj.getClass());
-		
-		EntityMetaData entityMetaData = DatabaseAdapterFactory.getEntityMetaData(entityName);
+		EntityMetaData entityMetaData = DatabaseAdapterFactory.getEntityMetaData(obj.getClass().getName());
 		if (entityMetaData == null)
-			throw new UnRegisteredEntityException(entityName);
+			throw new UnRegisteredEntityException(obj.getClass().getName());
 		
-		ContentValues values = new ContentValues();
-		for (String columnName : entityMetaData.columns.keySet())
-			addToContent(values, columnName, entityMetaData.columnGetter(columnName).invoke(obj), entityMetaData.columns.get(columnName));
+		Map<String,ContentValues> tableContentMap = new HashMap<String, ContentValues>(entityMetaData.getTableCount());
+		
+		for (TableMetaData metaData : entityMetaData.getMappedTables()){
+			ContentValues values = new ContentValues();
+			for(ColumnMetaData columnMetaData : metaData.getColumns()){
+				addToContent(values, columnMetaData.getColumnName(), columnMetaData.getGetter().invoke(obj), columnMetaData);
+			}
+		}
+			
 		
 		return values;
 	}

@@ -38,6 +38,7 @@ final class Registry {
 	private Map<String, EntityMetaData> entitis;
 	
 	// to reach tableMetaData faster
+	// keep them in parent-child order
 	private Map<String, TableMetaData> tables;
 	
 	private Map<String, CrossTableMetaData> crossTables;
@@ -194,13 +195,13 @@ final class Registry {
 				metaData = new TableMetaData();
 			}
 			type = type.getSuperclass();
-			//end checking super classes
+			// end checking super classes
 			if (!type.isAnnotationPresent(Entity.class)) {
 				// if there exist no primary key
 				if (!hasPrimaryKey)
 					throw new PrimaryKeyNotFoundException(qualifiedName);
-				if(lastTableName.equals("")){
-					//TODO throw table exception
+				if (lastTableName.equals("")) {
+					// TODO throw table exception
 				}
 				metaData.setName(lastTableName);
 				this.tables.get(lastTableName).merge(metaData);
@@ -208,4 +209,21 @@ final class Registry {
 		}
 		return new EntityMetaData(tableMetaDatas, clazz, oneToManyDatas);
 	}
+	
+	public Map<String, EntityMetaData> getEntityRegistry() {
+		return this.entitis;
+	}
+	
+	public EntityMetaData getEntityMetaData(String entityName) {
+		return this.entitis.get(entityName);
+	}
+	
+	public Map<String,TableMetaData> getTableRegistry() {
+		return this.tables;
+	}
+	
+	public TableMetaData getTableMetaData(String tableName) {
+		return this.tables.get(tableName);
+	}
+	
 }
